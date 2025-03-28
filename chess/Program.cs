@@ -1,9 +1,10 @@
 using chess.Data;
+using chess.Data.service;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
+builder.Services.AddSingleton<EmailService>();
 
 builder.Services.AddDbContext<AppDbContext>(options =>
 {

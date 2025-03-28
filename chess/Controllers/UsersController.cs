@@ -3,7 +3,6 @@ using chess.dto.user;
 using chess.Response;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 
 namespace chess.Controllers
 {
@@ -28,7 +27,9 @@ namespace chess.Controllers
                 return Conflict(new { message = "El correo electronico ya existe" });
             }
 
-            userDto.Password = BCrypt.Net.BCrypt.HashPassword(userDto.Password);
+            var salt = BCrypt.Net.BCrypt.GenerateSalt();
+
+            userDto.Password = BCrypt.Net.BCrypt.HashPassword(userDto.Password, salt);
 
             _context.Users.Add(userDto);
             await _context.SaveChangesAsync();
@@ -48,7 +49,8 @@ namespace chess.Controllers
         [HttpGet]
         public async Task<ActionResult> GetUsers()
         {
-            var users = await _context.Users.ToListAsync();
+            var users = await _context.Users.Where(u => !u.IsDeleted).ToListAsync();
+
             var usersResponse = users.Select(u => new UserResponseDto
             {
                 Id = u.Id,
@@ -64,12 +66,11 @@ namespace chess.Controllers
         {
             var query = _context.Users.AsQueryable();
 
-
             var total = await query.CountAsync();
             var totalPages = (int)Math.Ceiling(total / (double)pageSize);
 
             var users = await _context.Users
-                .Where(u => u.UserName.Contains(search) || u.Email.Contains(search))
+                .Where(u => (u.UserName.Contains(search) || u.Email.Contains(search)) && !u.IsDeleted)
                 .Skip((page - 1) * pageSize)
                 .Take(pageSize)
                 .ToListAsync();
@@ -91,11 +92,74 @@ namespace chess.Controllers
                     PageSize = pageSize,
                     TotalPages = totalPages
                 }
-
             };
 
             return Ok(response);
         }
 
+        [HttpPatch("{id}")]
+        public async Task<ActionResult<UserResponseDto>> UpdateUser(int id, UserPatchDto user)
+        {
+            var userToUpdate = await _context.Users.FindAsync(id);
+
+            if (userToUpdate is null)
+            {
+                return NotFound(new { message = "Usuario no encontrado" });
+            }
+
+            // Solo actualizar los campos que no sean nulos
+            if (!string.IsNullOrWhiteSpace(user.UserName))
+            {
+                userToUpdate.UserName = user.UserName;
+            }
+
+            if (!string.IsNullOrWhiteSpace(user.Email))
+            {
+                userToUpdate.Email = user.Email;
+            }
+
+            try
+            {
+                await _context.SaveChangesAsync();
+            }
+            catch (DbUpdateException ex)
+            {
+                return Conflict(new { message = "Error al actualizar usuario", error = ex.Message });
+            }
+
+            var userDto = new UserResponseDto
+            {
+                Id = userToUpdate.Id,
+                Email = userToUpdate.Email,
+                UserName = userToUpdate.UserName,
+            };
+
+            var response = new ApiResponse<UserResponseDto>("Usuario Actualizado correctamente", userDto);
+
+
+            return Ok(response);
+        }
+
+        [HttpDelete("{id}")]
+        public async Task<ActionResult> DeleteUser(int id)
+        {
+            var user = await _context.Users.FindAsync(id);
+
+            if (user is null || user.IsDeleted) // También verifica si ya está eliminado
+            {
+                return NotFound(new { message = "Usuario no encontrado" });
+            }
+
+            // En lugar de Remove, actualizamos los campos para soft delete
+            user.IsDeleted = true;
+            user.DeletedAt = DateTime.UtcNow;
+
+            // Opcional: registrar qué usuario realizó la eliminación
+            user.DeletedBy = user.UserName; // Requiere autenticación
+
+            await _context.SaveChangesAsync();
+
+            return Ok(new ApiResponse<string>("Usuario marcado como eliminado correctamente", ""));
+        }
     }
 }
